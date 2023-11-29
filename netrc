@@ -1,0 +1,169 @@
+#!/bin/sh
+# netrc
+#
+# Respecting format in ~/.netrc according to:
+# https://www.gnu.org/software/inetutils/manual/html_node/The-_002enetrc-file.html
+# Support for machine, login, and password tokens.
+# No support for default, account, or macdef tokens.
+
+VERSION='1.0.0'
+
+netrc_main() {
+	trap _exit INT TERM
+
+	E_ARGS=16
+	E_NO_FILE=17
+	E_NO_MACHINE=18
+
+	SCRIPT_INV="$( basename "$0" )"
+	SCRIPT_PATH="$( readlink -f "$0" )"
+	SCRIPT_NAME="$( basename "$SCRIPT_PATH" )"
+
+	[ -z "$NETRC_FILE" ] && NETRC_FILE="$HOME/.netrc"
+
+	while getopts hv OPT
+	do
+		case $OPT in
+			h) CMD=help ;;
+			v) CMD=version ;;
+			*) _invalid_opt ;;
+		esac
+	done
+
+	shift "$(( OPTIND - 1 ))"
+
+	[ -z "$CMD" ] && CMD="process"
+
+	case "$CMD" in
+		help|process|version) "netrc_$CMD" "$@" ;;
+		*) _invalid_cmd ;;
+	esac
+
+	_exit
+}
+
+netrc_help() {
+cat <<USAGE
+$SCRIPT_NAME $VERSION
+
+USAGE: $SCRIPT_INV [<options>] [<machine>]
+
+Output account credentials from ~/.netrc file.
+
+If no machine name is given, all machine names will be listed.
+
+OPTIONS:
+
+	-h        Show this help screen.
+	-v        Show script name and version number.
+
+USAGE
+}
+
+netrc_process() {
+	[ ! -f "$NETRC_FILE" ] && _fatal "$E_NO_FILE" "No $NETRC_FILE file found."
+
+	selected="$1"
+
+	_clear_creds
+
+	if [ -z "$selected" ]
+	then
+		_parse_netrc
+		return
+	fi
+
+	eval "$( _parse_netrc )"
+
+	if [ -z "$login" ]
+	then
+		_fatal "$E_NO_MACHINE" "No machine named '$selected' found."
+	fi
+
+	printf "%s %s\n" "$login" "$password"
+}
+
+_clear_creds() {
+	machine=
+	login=
+	password=
+}
+
+_parse_netrc() {
+	_parse_tokens | while read -r key && read -r value
+	do
+		case "$key" in
+			machine)
+				machine="$value"
+
+				if [ -z "$selected" ]
+				then
+					_echo "$machine"
+					continue
+				fi
+				;;
+
+			login|password)
+				[ -z "$selected" ] && continue
+				[ -z "$machine" ] && continue
+				eval "export $key=\"$value\""
+				;;
+		esac
+
+		if [ "$machine" = "$selected" ] && [ -n "$login" ] && [ -n "$password" ]
+		then
+			printf "login=%s\npassword=%s\n" "$login" "$password"
+			break
+		fi
+	done
+}
+
+_parse_tokens() {
+	while read -r line
+	do
+		for token in $( echo "$line" | sed -E 's/(^| )#.*$//' )
+		do
+			echo "$token"
+		done
+	done < "$NETRC_FILE"
+}
+
+netrc_version() {
+	_echo "$SCRIPT_NAME $VERSION"
+}
+
+_echo() {
+	echo "$@"
+}
+
+_error() {
+	_echo "$@" >&2
+}
+
+_exit() {
+	exit_code=$?
+	exit "$exit_code"
+}
+
+_fatal() {
+	exit_code="$1"
+	shift
+	_error "$@"
+	exit "$exit_code"
+}
+
+_invalid_cmd() {
+	_error "Invalid command: $CMD"
+	_echo
+	netrc_help
+	exit "$E_ARGS"
+}
+
+_invalid_opt() {
+	_error "Invalid option: $OPT"
+	_echo
+	netrc_help
+	exit "$E_ARGS"
+}
+
+netrc_main "$@"
